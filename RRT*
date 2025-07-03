@@ -1,0 +1,145 @@
+import numpy as np
+import matplotlib.pyplot as plt
+import math
+from scipy.spatial import KDTree
+
+class Node:
+    def __init__(self, x, y):
+        self.x = x
+        self.y = y
+        self.parent = None
+        self.cost = 0.0  # 从起点到当前节点的累积成本
+
+def distance(node1, node2):
+    return math.sqrt((node1.x - node2.x)**2 + (node1.y - node2.y)**2)
+
+def steer(from_node, to_node, step_size):
+    dist = distance(from_node, to_node)
+    if dist < step_size:
+        return to_node
+    else:
+        theta = math.atan2(to_node.y - from_node.y, to_node.x - from_node.x)
+        new_node = Node(from_node.x + step_size * math.cos(theta),
+                        from_node.y + step_size * math.sin(theta))
+        new_node.cost = from_node.cost + step_size
+        return new_node
+
+def is_collision_free(new_node, obstacles, obstacle_radius):
+    for (ox, oy) in obstacles:
+        if distance(new_node, Node(ox, oy)) <= obstacle_radius:
+            return False
+    return True
+
+def nearest_node(nodes, tree, query_node):
+    _, idx = tree.query([query_node.x, query_node.y])
+    return nodes[idx]
+
+def near_nodes(nodes, tree, query_node, radius):
+    indices = tree.query_ball_point([query_node.x, query_node.y], radius)
+    return [nodes[i] for i in indices]
+
+def rewire(new_node, near_nodes, obstacles, obstacle_radius):
+    for near_node in near_nodes:
+        if near_node == new_node.parent:
+            continue
+        
+        # 检查是否可以通过new_node获得更短的路径
+        new_cost = new_node.cost + distance(new_node, near_node)
+        if new_cost < near_node.cost:
+            # 检查路径是否无碰撞
+            temp_node = Node(near_node.x, near_node.y)
+            temp_node.parent = new_node
+            if is_collision_free(temp_node, obstacles, obstacle_radius):
+                near_node.parent = new_node
+                near_node.cost = new_cost
+                # 需要递归更新所有子节点的cost
+                update_children_cost(near_node)
+
+def update_children_cost(node):
+    for child in [n for n in nodes if n.parent == node]:
+        child.cost = node.cost + distance(node, child)
+        update_children_cost(child)
+
+def rrt_star(start, goal, area, obstacles, obstacle_radius, max_iter=1000, step_size=1.0, goal_sample_rate=0.1):
+    start_node = Node(start[0], start[1])
+    goal_node = Node(goal[0], goal[1])
+    
+    nodes = [start_node]
+    tree = KDTree([(start_node.x, start_node.y)])
+    
+    for _ in range(max_iter):
+        # 随机采样
+        if np.random.rand() > goal_sample_rate:
+            rand_node = Node(np.random.uniform(area[0], area[1]),
+                            np.random.uniform(area[2], area[3]))
+        else:
+            rand_node = goal_node
+        
+        # 找到最近的节点
+        nearest = nearest_node(nodes, tree, rand_node)
+        
+        # 向随机节点方向生长
+        new_node = steer(nearest, rand_node, step_size)
+        new_node.parent = nearest
+        new_node.cost = nearest.cost + distance(nearest, new_node)
+        
+        # 检查是否无碰撞
+        if is_collision_free(new_node, obstacles, obstacle_radius):
+            # 找到附近的节点
+            near_radius = 2.0 * step_size
+            near_nodes_list = near_nodes(nodes, tree, new_node, near_radius)
+            
+            # 选择最优父节点
+            for near_node in near_nodes_list:
+                new_cost = near_node.cost + distance(near_node, new_node)
+                if new_cost < new_node.cost:
+                    if is_collision_free(steer(near_node, new_node, step_size), obstacles, obstacle_radius):
+                        new_node.parent = near_node
+                        new_node.cost = new_cost
+            
+            nodes.append(new_node)
+            tree = KDTree([(n.x, n.y) for n in nodes])
+            
+            # 重新布线
+            rewire(new_node, near_nodes_list, obstacles, obstacle_radius)
+            
+            # 检查是否到达目标
+            if distance(new_node, goal_node) <= step_size:
+                final_node = steer(new_node, goal_node, step_size)
+                final_node.parent = new_node
+                final_node.cost = new_node.cost + distance(new_node, final_node)
+                
+                if is_collision_free(final_node, obstacles, obstacle_radius):
+                    nodes.append(final_node)
+                    tree = KDTree([(n.x, n.y) for n in nodes])
+                    return nodes, final_node
+    
+    return nodes, None  # 没有找到路径
+
+# 示例使用
+if __name__ == "__main__":
+    # 定义搜索区域 (x_min, x_max, y_min, y_max)
+    area = (0, 10, 0, 10)
+    
+    # 定义障碍物
+    obstacles = [(2, 2), (3, 3), (4, 4), (5, 5), (6, 6), (7, 7), (8, 8)]
+    obstacle_radius = 0.5
+    
+    # 起点和终点
+    start = (1, 1)
+    goal = (9, 9)
+    
+    # 运行RRT*算法
+    nodes, final_node = rrt_star(start, goal, area, obstacles, obstacle_radius, max_iter=1000)
+    
+    # 提取路径
+    path = []
+    if final_node:
+        current = final_node
+        while current:
+            path.append((current.x, current.y))
+            current = current.parent
+        path.reverse()
+        print("RRT*找到的路径:", path)
+    else:
+        print("未找到路径")
